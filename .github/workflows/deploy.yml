@@ -1,0 +1,47 @@
+name: Deploy slate-api
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build
+        run: |
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+            go build -ldflags="-s -w" -o slate-api ./cmd/api
+
+      - name: SSH Setup
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H ${{ secrets.SSH_HOST }} >> ~/.ssh/known_hosts
+
+      - name: SCP
+        run: |
+          scp -i ~/.ssh/id_ed25519 slate-api \
+            ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:~/slate-api/slate-api.new
+
+      - name: Install and restart
+        run: |
+          ssh -i ~/.ssh/id_ed25519 ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} '
+            set -e
+            cd ~/slate-api
+            cp slate-api slate-api.prev 2>/dev/null || true
+            mv slate-api.new slate-api
+            chmod +x slate-api
+            sudo systemctl restart slate-api
+            sleep 3
+            curl -fsS localhost:8080/health > /dev/null
+          '
